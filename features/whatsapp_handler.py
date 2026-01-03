@@ -11,12 +11,17 @@ import re
 from thefuzz import fuzz
 
 class WhatsAppHandler:
-    def __init__(self):
+    def __init__(self, tts_engine=None, speech_recognizer=None, audio_handler=None):
         self.driver = None
         self.is_logged_in = False
         self.contacts = {}
         self.pending_message_contact = None
-        
+
+        # For interactive message asking
+        self.tts_engine = tts_engine
+        self.speech_recognizer = speech_recognizer
+        self.audio_handler = audio_handler
+
         # Load contacts from data/contacts.json
         self.load_contacts()
     
@@ -117,22 +122,57 @@ class WhatsAppHandler:
             print("   Make sure Brave is installed and the profile path is correct")
     
     def ask_for_message(self, contact_name):
-        """Ask user for message content - returns True if waiting for message"""
-        self.pending_message_contact = contact_name
-        return True
+        """Ask user for the message to send"""
+        if not self.tts_engine or not self.speech_recognizer or not self.audio_handler:
+            # Fallback: set pending and return signal to ask user
+            self.pending_message_contact = contact_name
+            return None
+
+        try:
+            # Ask user what message to send
+            question = f"What message should I send to {contact_name}?"
+            print(f"🗣️ LYRA: {question}")
+            self.tts_engine.speak(question)
+
+            # Wait for TTS to finish
+            time.sleep(1)
+
+            # Listen for user's response
+            print("👂 Listening for your message...")
+            audio_data = self.audio_handler.record_audio(duration=5)
+
+            if audio_data is not None:
+                message_text = self.speech_recognizer.transcribe(audio_data)
+
+                if message_text and message_text.strip():
+                    print(f"📝 Message to send: {message_text}")
+                    return message_text.strip()
+                else:
+                    print("⚠️ No message detected, using default")
+                    return "Hello from LYRA!"
+            else:
+                print("⚠️ Could not record audio, using default message")
+                return "Hello from LYRA!"
+
+        except Exception as e:
+            print(f"⚠️ Error asking for message: {e}")
+            return "Hello from LYRA!"
     
     def send_message(self, contact_name, message=None):
-        """Send a WhatsApp message with fuzzy contact matching"""
+        """Send a WhatsApp message with fuzzy contact matching and interactive message asking"""
         # Find contact with fuzzy matching
         original_name, phone_number = self.find_contact(contact_name)
-        
+
         if not original_name:
             return False, f"Contact '{contact_name}' not found in contacts.json"
-        
+
         # If no message provided, ask for it
         if not message or message.strip() == '' or message == 'Hello from LYRA!':
-            self.pending_message_contact = original_name
-            return True, f"What message should I send to {original_name}?"
+            asked_message = self.ask_for_message(original_name)
+            if asked_message is None:
+                # Fallback: return signal to command processor
+                return True, f"What message should I send to {original_name}?"
+            message = asked_message
 
         if not self.driver or not self.is_logged_in:
             self.initialize_driver()
@@ -148,30 +188,40 @@ class WhatsAppHandler:
             search_box.clear()
             search_box.send_keys(original_name)
             time.sleep(1)
-            
+
             # Wait for search results to appear and click contact
             contact_xpath = f'//span[@title="{original_name}"]'
             contact = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, contact_xpath))
             )
-            
+
             # Click on contact
             contact.click()
             time.sleep(1)
-            
+
             # Type and send message
             message_box = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="conversation-compose-box-input"]'))
             )
             message_box.send_keys(message)
             message_box.send_keys(Keys.ENTER)
-            
+
             # Clear pending contact
             self.pending_message_contact = None
-            
-            return True, f"Message sent to {original_name}"
+
+            # Confirm success
+            success_msg = f"Message sent to {original_name}."
+            print(f"✅ {success_msg}")
+
+            # Speak confirmation if TTS available
+            if self.tts_engine:
+                self.tts_engine.speak(success_msg)
+
+            return True, success_msg
         except Exception as e:
-            return False, f"Failed to send message: {str(e)}"
+            error_msg = f"Failed to send message: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
     
     def close(self):
         if self.driver:
