@@ -498,6 +498,35 @@ class VoiceAssistant:
                 print(f"⚠️ Translation bridge error: {e}, using original text")
                 processing_text = original_text
 
+        # ✅ CHECK FOR PENDING WHATSAPP/EMAIL CONVERSATIONS FIRST
+        # If WhatsApp handler is waiting for message input
+        if self.whatsapp_handler.check_pending_state():
+            success, msg = self.whatsapp_handler.handle_pending_input(processing_text)
+            # Translate response back if needed
+            if detected_lang != 'en' and msg:
+                try:
+                    from core.translation_engine import get_translation_engine
+                    translator = get_translation_engine()
+                    if translator.is_available():
+                        msg = translator.translate_from_english(msg, detected_lang)
+                except Exception:
+                    pass
+            return msg
+        
+        # If Email handler is waiting for subject or message input
+        if self.email_handler.check_pending_state():
+            success, msg = self.email_handler.handle_pending_input(processing_text)
+            # Translate response back if needed
+            if detected_lang != 'en' and msg:
+                try:
+                    from core.translation_engine import get_translation_engine
+                    translator = get_translation_engine()
+                    if translator.is_available():
+                        msg = translator.translate_from_english(msg, detected_lang)
+                except Exception:
+                    pass
+            return msg
+
         # ✅ FEATURE 2: Check for emotional content FIRST (in English)
         emotion = self.emotion_analyzer.detect_emotion(processing_text)
 
