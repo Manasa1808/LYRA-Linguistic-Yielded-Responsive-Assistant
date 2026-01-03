@@ -8,39 +8,43 @@ import time
 import json
 import os
 import difflib
+import re
+import string
 
 class WhatsAppHandler:
-    def __init__(self):
+    def __init__(self, tts_engine=None, speech_recognizer=None, audio_handler=None):
         self.driver = None
         self.is_logged_in = False
         self.contacts = {}
-        self.contacts_original = {}  # Original names with proper casing
-        self.contacts_normalized = {}  # Normalized names for matching
-        
-        # Load contacts from data/contacts.json
+        self.contacts_original = {}
+        self.contacts_normalized = {}
+
+        # For interactive message asking
+        self.tts_engine = tts_engine
+        self.speech_recognizer = speech_recognizer
+        self.audio_handler = audio_handler
+
         self.load_contacts()
-    
+
     def load_contacts(self):
         """Load contacts from data/contacts.json with normalization"""
         contacts_file = os.path.join('data', 'contacts.json')
-        
+
         if os.path.exists(contacts_file):
             try:
                 with open(contacts_file, 'r', encoding='utf-8') as f:
                     contacts_data = json.load(f)
-                    
-                # Store contacts with normalization
+
                 for name, info in contacts_data.items():
                     phone = info.get('phone', '')
                     if phone:
-                        # Store original name and phone
                         self.contacts[name] = phone
                         self.contacts_original[name] = phone
-                        
-                        # Create normalized key: lowercase, no spaces, no dots
-                        normalized_key = name.lower().replace(' ', '').replace('.', '')
+
+                        # Normalize: lowercase, strip spaces, remove punctuation
+                        normalized_key = self._normalize_name(name)
                         self.contacts_normalized[normalized_key] = name
-                
+
                 print(f"✅ Loaded {len(self.contacts)} contacts from {contacts_file}")
             except Exception as e:
                 print(f"⚠️ Error loading contacts: {e}")
@@ -52,79 +56,130 @@ class WhatsAppHandler:
             self.contacts = {}
             self.contacts_original = {}
             self.contacts_normalized = {}
-    
+
+    def _normalize_name(self, name):
+        """Normalize name: lowercase, trim spaces, remove punctuation"""
+        # Lowercase
+        name = name.lower()
+        # Remove punctuation
+        name = name.translate(str.maketrans('', '', string.punctuation))
+        # Remove extra spaces and trim
+        name = ' '.join(name.split())
+        return name
+
     def find_contact(self, contact_name):
-        """Find contact with fuzzy matching"""
+        """Find contact with fuzzy matching (80% confidence threshold)"""
         # Normalize input
-        normalized_input = contact_name.lower().replace(' ', '').replace('.', '')
-        
+        normalized_input = self._normalize_name(contact_name)
+
         # Try exact normalized match first
         if normalized_input in self.contacts_normalized:
             original_name = self.contacts_normalized[normalized_input]
             return original_name, self.contacts_original[original_name]
-        
-        # Try fuzzy matching
+
+        # Try fuzzy matching with 80% threshold (0.8 cutoff)
         normalized_keys = list(self.contacts_normalized.keys())
-        matches = difflib.get_close_matches(normalized_input, normalized_keys, n=1, cutoff=0.6)
-        
+        matches = difflib.get_close_matches(normalized_input, normalized_keys, n=1, cutoff=0.8)
+
         if matches:
             best_match_key = matches[0]
             original_name = self.contacts_normalized[best_match_key]
             return original_name, self.contacts_original[original_name]
-        
+
         # No match found
         return None, None
-    
+
     def initialize_driver(self):
-        """Initialize Brave Browser WebDriver"""
+        """Initialize Brave Browser WebDriver using real user profile"""
         options = webdriver.ChromeOptions()
-        
+
         # Set Brave browser binary location
         brave_path = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
         options.binary_location = brave_path
-        
-        # User data directory for persistent session
-        options.add_argument('--user-data-dir=./whatsapp_session')
-        
+
+        # Use REAL Brave user profile (NO QR scanning needed)
+        user_data_dir = r"C:\Users\manas\AppData\Local\BraveSoftware\Brave-Browser\User Data"
+        options.add_argument(f'--user-data-dir={user_data_dir}')
+        options.add_argument('--profile-directory=Default')
+
         # Additional options for stability
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        
+
         try:
-            # Use Chrome driver (compatible with Brave)
             from webdriver_manager.chrome import ChromeDriverManager
             service = Service(ChromeDriverManager().install())
             self.driver = webdriver.Chrome(service=service, options=options)
-            
+
             self.driver.get('https://web.whatsapp.com')
-            print("🔐 Scan QR code to login to WhatsApp Web in Brave browser")
-            
-            # Wait for login
+            print("🔄 Opening WhatsApp Web with your existing Brave session...")
+
+            # Wait for WhatsApp to load (should already be logged in)
             try:
-                WebDriverWait(self.driver, 60).until(
+                WebDriverWait(self.driver, 30).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-list"]'))
                 )
                 self.is_logged_in = True
-                print("✅ WhatsApp Web logged in successfully")
+                print("✅ WhatsApp Web loaded successfully (already logged in)")
             except:
-                print("⏱️ Login timeout")
-                
+                print("⏱️ WhatsApp Web login timeout")
+
         except Exception as e:
             print(f"❌ Failed to initialize Brave browser: {e}")
-            print("   Make sure Brave is installed at: C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe")
-    
-    def send_message(self, contact_name, message):
-        """Send a WhatsApp message with fuzzy contact matching"""
+            print("   Make sure Brave is installed and the profile path is correct")
+
+    def ask_for_message(self, contact_name):
+        """Ask user for the message to send"""
+        if not self.tts_engine or not self.speech_recognizer or not self.audio_handler:
+            # Fallback: return default message if no TTS/ASR available
+            return "Hello from LYRA!"
+
+        try:
+            # Ask user what message to send
+            question = f"What message should I send to {contact_name}?"
+            print(f"🗣️ LYRA: {question}")
+            self.tts_engine.speak(question)
+
+            # Wait for TTS to finish
+            time.sleep(1)
+
+            # Listen for user's response
+            print("👂 Listening for your message...")
+            audio_data = self.audio_handler.record_audio(duration=5)
+
+            if audio_data is not None:
+                message_text = self.speech_recognizer.transcribe(audio_data)
+
+                if message_text and message_text.strip():
+                    print(f"📝 Message to send: {message_text}")
+                    return message_text.strip()
+                else:
+                    print("⚠️ No message detected, using default")
+                    return "Hello from LYRA!"
+            else:
+                print("⚠️ Could not record audio, using default message")
+                return "Hello from LYRA!"
+
+        except Exception as e:
+            print(f"⚠️ Error asking for message: {e}")
+            return "Hello from LYRA!"
+
+    def send_message(self, contact_name, message=None):
+        """Send a WhatsApp message with fuzzy contact matching and interactive message asking"""
         # Find contact with fuzzy matching
         original_name, phone_number = self.find_contact(contact_name)
-        
+
         if not original_name:
             return False, f"Contact '{contact_name}' not found in contacts.json"
+
+        # If no message provided, ask the user
+        if not message or message == "Hello from LYRA!":
+            message = self.ask_for_message(original_name)
 
         if not self.driver or not self.is_logged_in:
             self.initialize_driver()
             if not self.is_logged_in:
-                return False, "Please scan QR code in Brave to login WhatsApp"
+                return False, "Could not connect to WhatsApp Web"
 
         try:
             # Search for contact
@@ -134,28 +189,38 @@ class WhatsAppHandler:
             search_box.click()
             search_box.clear()
             search_box.send_keys(original_name)
-            
+
             # Wait for search results to appear
             contact_xpath = f'//span[@title="{original_name}"]'
             contact = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, contact_xpath))
             )
-            
+
             # Click on contact
             contact.click()
             time.sleep(1)
-            
+
             # Type and send message
             message_box = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="conversation-compose-box-input"]'))
             )
             message_box.send_keys(message)
             message_box.send_keys(Keys.ENTER)
-            
-            return True, f"Message sent to {original_name} ({phone_number})"
+
+            # Confirm success
+            success_msg = f"Message sent to {original_name}."
+            print(f"✅ {success_msg}")
+
+            # Speak confirmation if TTS available
+            if self.tts_engine:
+                self.tts_engine.speak(success_msg)
+
+            return True, success_msg
         except Exception as e:
-            return False, f"Failed to send message: {str(e)}"
-    
+            error_msg = f"Failed to send message: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
+
     def close(self):
         if self.driver:
             self.driver.quit()

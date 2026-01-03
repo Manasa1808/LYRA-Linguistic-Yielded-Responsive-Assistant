@@ -169,7 +169,11 @@ class VoiceAssistant:
         self.calendar_manager = CalendarManager(self.db)
         self.notes_manager = NotesManager(self.db)
         self.email_handler = EmailHandler()
-        self.whatsapp_handler = WhatsAppHandler()
+        self.whatsapp_handler = WhatsAppHandler(
+            tts_engine=self.tts,
+            speech_recognizer=self.speech_recognizer,
+            audio_handler=self.audio_handler
+        )
 
         # ✅ FEATURE 3: Voice isolation state management
         self.assistant_state = "ready"
